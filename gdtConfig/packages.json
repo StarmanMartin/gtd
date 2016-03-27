@@ -1,0 +1,6 @@
+{
+    "cwd": "/home/martin/develop/projekte/GO",
+    "gopath": "/home/maritn/GoPath/",
+    "list": ["goconfig", "simple-fs", "gtd"],
+    "install": "go install github.com/starmanmartin/%package%"
+}
