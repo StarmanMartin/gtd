@@ -5,23 +5,29 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
-	"github.com/kardianos/osext"
+    "os/user"
 	"github.com/starmanmartin/simple-fs"
-	"github.com/starmanmartin/goconfig"
+    "flag"
 )
 
 const (
-	packagePlaceholder = "%package%"
+    gdtDir = "/.gtdConfig"
 )
 
+var (
+	isAdd, isRest bool
+    goconfig *container
+)
+
+func init(){
+    flag.BoolVar(&isAdd, "a", false, "Add package to deployment list")
+	flag.BoolVar(&isRest, "r", false, "Reset config File")
+}
+
 func getPakckageList() ([]string, []string) {
-	cwd, _ := goconfig.GetString("cwd")
-	list, ok := goconfig.GetArrayString("list")
-	if !ok {
-		log.Panicln("No list in package.json")
-	}
+	cwd := goconfig.Cwd
+	list := goconfig.List	
 
 	pathList := make([]string, len(list))
 	for i, val := range list {
@@ -32,27 +38,8 @@ func getPakckageList() ([]string, []string) {
 }
 
 func getGoPath() string {
-	gpath, ok := goconfig.GetString("gopath")
-	if !ok {
-		gpath = os.Getenv("GOPATH")
-	}
-	if runtime.GOOS == "windows" {
-		gpath = strings.Split(gpath, ";")[0] + "/src"
-	} else {
-		gpath = strings.Split(gpath, ":")[0] + "/src"
-	}
-
-	return strings.Replace(gpath, "//", "/", -1)
-}
-
-func prepareInstall() string {
-	gpath, ok := goconfig.GetString("install")
-	if !ok {
-		gpath = os.Getenv("GOPATH")
-	}
-
-	gpath = strings.Split(gpath, ";")[0] + "/src"
-	return strings.Replace(gpath, "//", "/", -1)
+	gpath := goconfig.Gopath
+	return strings.Replace(gpath, "//", "/", -1) + "/src"
 }
 
 func getCmd(cmdCommand string) *exec.Cmd {
@@ -69,12 +56,12 @@ func getCmd(cmdCommand string) *exec.Cmd {
 }
 
 func exeInstall(packagename string) error {
-	cmdCommand, ok := goconfig.GetString("install")
-	if !ok {
+	cmdCommand := goconfig.Install
+	if cmdCommand == "" {
 		return errors.New("No install command")
 	}
 
-	cmdCommand = strings.Replace(cmdCommand, packagePlaceholder, packagename, -1)
+    cmdCommand = "go install " + cmdCommand +  "/" + packagename
 
 	cmd := getCmd(cmdCommand)
 
@@ -85,27 +72,53 @@ func exeInstall(packagename string) error {
 	return nil
 }
 
-func main() {
-	log.Println("Started test deployment")
-	cwd, _ := osext.ExecutableFolder()
+func getGdtDir() string {
+    cUser, err := user.Current()
     
-	if err := goconfig.InitConficOnce(cwd + "/gdtConfig/packages.json"); err != nil {
-		log.Panicln(err)
+    if err != nil {
+        log.Panicln(err)
+    }
+    
+    gdtPath := cUser.HomeDir + gdtDir
+    
+    if exists, readErr := fs.Exists(gdtPath); !exists {
+        os.MkdirAll(gdtPath, os.ModePerm)
+    } else if readErr != nil {
+        log.Panicln(readErr)
+    }
+    
+    return gdtPath
+}
+
+func main() {
+    flag.Parse()    
+    var err error
+    if goconfig, err = readJSON(getGdtDir() + "/packages.json"); err != nil || isRest {	
+        inputAll(goconfig)
+        goconfig.saveJSON(getGdtDir() + "/packages.json")
 		return
 	}
+    
+    if isAdd {
+        inputAddPackage(goconfig)
+        goconfig.saveJSON(getGdtDir() + "/packages.json")
+    } 
+    
+	log.Println("Started test deployment")	
 
 	pathList, packageList := getPakckageList()
 	gopath := getGoPath()
 
 	for i, v := range pathList {
-		if err := fs.CopyFolderAndIngonre(v, gopath, ".git"); err != nil {
+		if err := fs.SyncFolderAndIngonre(v, gopath, ".git"); err != nil {
 			log.Println(err)
-		}
-		if err := exeInstall(packageList[i]); err != nil {
-			log.Println("Error: ", err)
 		}
 
 		log.Println("Copied", packageList[i])
+        
+		if err := exeInstall(packageList[i]); err != nil {
+			log.Println("Error: ", err)
+		}
 	}
 
 }
